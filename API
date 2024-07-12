@@ -1,0 +1,67 @@
+from fastapi import FastAPI, HTTPException, Query, status
+from sqlalchemy import create_engine, Column, Integer, String
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import IntegrityError
+from fastapi_pagination import Page, pagination_params
+
+# Criando a aplicação FastAPI
+app = FastAPI()
+
+# Configuração do banco de dados SQLite em memória para exemplo
+SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
+engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+# Definição do modelo Atleta
+class Atleta(Base):
+    __tablename__ = "atletas"
+
+    id = Column(Integer, primary_key=True, index=True)
+    nome = Column(String, index=True)
+    cpf = Column(String, unique=True, index=True)
+    centro_treinamento = Column(String)
+    categoria = Column(String)
+
+# Criação das tabelas no banco de dados
+Base.metadata.create_all(bind=engine)
+
+# Função para criar uma sessão do banco de dados
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# Endpoint para criar um novo atleta
+@app.post("/atletas/", status_code=status.HTTP_201_CREATED)
+def create_atleta(nome: str, cpf: str, centro_treinamento: str, categoria: str, db: Session = Depends(get_db)):
+    try:
+        atleta = Atleta(nome=nome, cpf=cpf, centro_treinamento=centro_treinamento, categoria=categoria)
+        db.add(atleta)
+        db.commit()
+        return {"message": "Atleta criado com sucesso"}
+    except IntegrityError as e:
+        db.rollback()
+        return HTTPException(status_code=status.HTTP_303_SEE_OTHER, detail=f"Já existe um atleta cadastrado com o cpf: {cpf}")
+
+# Endpoint para listar todos os atletas com suporte a query parameters
+@app.get("/atletas/", response_model=Page[Atleta])
+def read_atletas(nome: str = Query(None, description="Filtrar por nome"),
+                 cpf: str = Query(None, description="Filtrar por CPF"),
+                 db: Session = Depends(get_db),
+                 pagination: dict = pagination_params):
+    
+    filters = []
+    if nome:
+        filters.append(Atleta.nome.ilike(f"%{nome}%"))
+    if cpf:
+        filters.append(Atleta.cpf == cpf)
+    
+    query = db.query(Atleta).filter(*filters)
+    return Page(query, **pagination)
+
+# Exemplo de uso de paginação: /atletas/?limit=10&offset=0
+
