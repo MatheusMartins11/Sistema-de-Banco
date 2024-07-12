@@ -1,0 +1,89 @@
+from fastapi import FastAPI, HTTPException, Query, Path, status, Depends
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import IntegrityError, NoResultFound
+from datetime import datetime
+
+# Criando a aplicação FastAPI
+app = FastAPI()
+
+# Configuração do banco de dados SQLite em memória para exemplo
+SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
+engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+# Definição do modelo Produto
+class Produto(Base):
+    __tablename__ = "produtos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    nome = Column(String, index=True)
+    descricao = Column(String)
+    preco = Column(Float)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+# Criação das tabelas no banco de dados
+Base.metadata.create_all(bind=engine)
+
+# Função para criar uma sessão do banco de dados
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# Endpoint para cadastrar um novo produto
+@app.post("/produtos/", status_code=status.HTTP_201_CREATED)
+def create_produto(nome: str, descricao: str, preco: float, db: Session = Depends(get_db)):
+    try:
+        produto = Produto(nome=nome, descricao=descricao, preco=preco)
+        db.add(produto)
+        db.commit()
+        return {"message": "Produto criado com sucesso"}
+    except IntegrityError as e:
+        db.rollback()
+        return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Erro ao inserir produto")
+
+# Endpoint para atualizar um produto pelo ID
+@app.patch("/produtos/{produto_id}/", status_code=status.HTTP_200_OK)
+def update_produto(produto_id: int, nome: str = None, descricao: str = None, preco: float = None,
+                   updated_at: datetime = None, db: Session = Depends(get_db)):
+    try:
+        produto = db.query(Produto).filter(Produto.id == produto_id).one()
+        if nome:
+            produto.nome = nome
+        if descricao:
+            produto.descricao = descricao
+        if preco:
+            produto.preco = preco
+        if updated_at:
+            produto.updated_at = updated_at
+        else:
+            produto.updated_at = datetime.utcnow()
+        
+        db.commit()
+        return {"message": "Produto atualizado com sucesso"}
+    except NoResultFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Produto não encontrado")
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+# Endpoint para listar produtos com filtro de preço
+@app.get("/produtos/", response_model=list[Produto])
+def read_produtos(min_price: float = Query(None), max_price: float = Query(None), db: Session = Depends(get_db)):
+    try:
+        query = db.query(Produto)
+        if min_price is not None:
+            query = query.filter(Produto.preco > min_price)
+        if max_price is not None:
+            query = query.filter(Produto.preco < max_price)
+        
+        produtos = query.all()
+        return produtos
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
